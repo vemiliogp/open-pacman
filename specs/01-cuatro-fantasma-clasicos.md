@@ -113,6 +113,7 @@ Cada paso deja el juego jugable.
 - **Sí:** salida por temporizador (0/2/4/6 s). La salida por dots comidos del arcade es más difícil de verificar jugando.
 - **Sí:** esquinas de scatter como casillas reales del laberinto (filas 1 y 29), no coordenadas fuera de mapa como el original.
 - **Sí:** reemplazo total de `hunter`/`random`: los `kind` pasan a ser los nombres de los 4 fantasmas.
+- **Sí:** la puerta de la casa bloquea también a los fantasmas (`isWall`). Con la puerta transitable, Blinky re-entraba en el primer frame por ser el camino Manhattan más corto con Pac-Man debajo; la salida guiada del escalonado no usa `canMove`, así que no se ve afectada. (Agregada durante la implementación del Paso 5.)
 - **No:** power pellets y frightened. Merecen su propio spec; aquí el foco son las personalidades.
 - **No:** 'Cruise Elroy', velocidades por fantasma y rebote en la casa. Preservan el balance actual (0.1) y el alcance chico.
 - **No:** reproducir el bug del arcade donde Pinky apunta mal cuando Pac-Man mira hacia arriba. Apuntamos exactamente 4 casillas adelante.
