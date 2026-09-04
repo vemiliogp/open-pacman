@@ -39,9 +39,10 @@ function createGame() {
     ghosts: GHOST_STARTS.map( ( g ) => ( {
       x: g.x,
       y: g.y,
-      dir: 'up',
+      dir: g.kind === 'blinky' ? 'left' : 'up',
       speed: GHOST_SPEED,
       kind: g.kind,
+      corner: g.corner,
     } ) ),
   };
 }
@@ -110,9 +111,32 @@ function movePacman( game ) {
   wrapTunnel( p, width );
 }
 
+// Casilla objetivo del fantasma segun su personalidad (modo chase).
+function ghostTarget( game, g ) {
+  const p = game.pacman;
+  const px = Math.round( p.x );
+  const py = Math.round( p.y );
+  const d = DIRS[ p.dir ];
+
+  if ( g.kind === 'blinky' ) return { x: px, y: py };
+  if ( g.kind === 'pinky' ) return { x: px + d.x * 4, y: py + d.y * 4 };
+  if ( g.kind === 'inky' ) {
+    // Reflejo de Blinky respecto a 2 casillas adelante de Pacman.
+    const blinky = game.ghosts.find( ( ph ) => ph.kind === 'blinky' );
+    if ( !blinky ) return { x: px, y: py }; // sin Blinky: su propio objetivo
+    const ax = px + d.x * 2;
+    const ay = py + d.y * 2;
+    return { x: 2 * ax - Math.round( blinky.x ), y: 2 * ay - Math.round( blinky.y ) };
+  }
+  // clyde: persigue lejos; a 8 casillas o menos se retira a su esquina.
+  const dist = Math.abs( Math.round( g.x ) - px ) + Math.abs( Math.round( g.y ) - py );
+  if ( dist > 8 ) return { x: px, y: py };
+  return { x: g.corner.x, y: g.corner.y };
+}
+
 function decideGhost( game, g ) {
   const grid = game.grid;
-  const p = game.pacman;
+  const target = ghostTarget( game, g );
 
   const options = Object.keys( DIRS ).filter(
     ( dir ) => dir !== OPPOSITE[ g.dir ] && canMove( grid, g.x, g.y, dir, 'ghost' )
@@ -120,25 +144,20 @@ function decideGhost( game, g ) {
   // Sin salida (callejon): permitir el giro de 180.
   const choices = options.length ? options : [ '' + OPPOSITE[ g.dir ] ];
 
-  if ( g.kind === 'hunter' ) {
-    const px = Math.round( p.x );
-    const py = Math.round( p.y );
-    let best = choices[ 0 ];
-    let bestDist = Infinity;
-    for ( const dir of choices ) {
-      const d = DIRS[ dir ];
-      const nx = g.x + d.x;
-      const ny = g.y + d.y;
-      const dist = Math.abs( nx - px ) + Math.abs( ny - py );
-      if ( dist < bestDist ) {
-        bestDist = dist;
-        best = dir;
-      }
+  // Elegir la direccion que minimiza la distancia Manhattan al objetivo.
+  let best = choices[ 0 ];
+  let bestDist = Infinity;
+  for ( const dir of choices ) {
+    const d = DIRS[ dir ];
+    const nx = g.x + d.x;
+    const ny = g.y + d.y;
+    const dist = Math.abs( nx - target.x ) + Math.abs( ny - target.y );
+    if ( dist < bestDist ) {
+      bestDist = dist;
+      best = dir;
     }
-    g.dir = best;
-  } else {
-    g.dir = choices[ Math.floor( Math.random() * choices.length ) ];
   }
+  g.dir = best;
 }
 
 function moveGhost( game, g ) {
