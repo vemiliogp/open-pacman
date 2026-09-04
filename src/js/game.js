@@ -13,6 +13,12 @@ const OPPOSITE = { left: 'right', right: 'left', up: 'down', down: 'up' };
 const PACMAN_SPEED = 0.125; // 1/8 celda/frame -> alinea cada 8 frames
 const GHOST_SPEED = 0.1;    // 1/10 celda/frame
 
+// Ciclo de modos: se repite 4 veces; despues, chase permanente.
+const MODE_CYCLE = [
+  { mode: 'scatter', secs: 7 },
+  { mode: 'chase', secs: 20 },
+];
+
 // Crea una partida nueva. Copia MAZE (pristino) a game.grid para poder comer
 // dots sin destruir el original, y reiniciar.
 function createGame() {
@@ -44,6 +50,8 @@ function createGame() {
       kind: g.kind,
       corner: g.corner,
     } ) ),
+    modeIndex: 0, // posicion en el ciclo de modos
+    modeTimer: 0, // frames desde el ultimo cambio de modo
   };
 }
 
@@ -111,8 +119,27 @@ function movePacman( game ) {
   wrapTunnel( p, width );
 }
 
+// Fase actual del ciclo (scatter/chase). Tras 4 ciclos, chase fijo.
+function currentMode( game ) {
+  if ( game.modeIndex >= MODE_CYCLE.length * 4 ) return 'chase';
+  return MODE_CYCLE[ game.modeIndex % MODE_CYCLE.length ].mode;
+}
+
+// Avanzar el temporizador de modos (cuenta frames de juego, ~60 fps).
+function advanceMode( game ) {
+  if ( game.modeIndex >= MODE_CYCLE.length * 4 ) return;
+  const phase = MODE_CYCLE[ game.modeIndex % MODE_CYCLE.length ];
+  if ( ++game.modeTimer >= phase.secs * 60 ) {
+    game.modeTimer = 0;
+    game.modeIndex++;
+  }
+}
+
 // Casilla objetivo del fantasma segun su personalidad (modo chase).
 function ghostTarget( game, g ) {
+  // En scatter cada fantasma persigue su esquina asignada.
+  if ( currentMode( game ) === 'scatter' ) return { x: g.corner.x, y: g.corner.y };
+
   const p = game.pacman;
   const px = Math.round( p.x );
   const py = Math.round( p.y );
@@ -195,6 +222,7 @@ function collides( a, b ) {
 }
 
 function update( game ) {
+  advanceMode( game );
   movePacman( game );
   game.ghosts.forEach( ( g ) => moveGhost( game, g ) );
 
