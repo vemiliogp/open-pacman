@@ -13,6 +13,11 @@ const OPPOSITE = { left: 'right', right: 'left', up: 'down', down: 'up' };
 const PACMAN_SPEED = 0.125; // 1/8 celda/frame -> alinea cada 8 frames
 const GHOST_SPEED = 0.1;    // 1/10 celda/frame
 
+const FRIGHT_SECS = 6;       // duracion total del frightened
+const FRIGHT_FLASH_SECS = 2; // ultimos segundos parpadeando azul/blanco
+const EYES_SPEED = 0.2;      // ojos regresan al doble de velocidad
+const DOOR_TOP = { x: 13, y: 11 }; // punto de entrada de los ojos
+
 // Ciclo de modos: se repite 4 veces; despues, chase permanente.
 const MODE_CYCLE = [
   { mode: 'scatter', secs: 7 },
@@ -28,7 +33,7 @@ function createGame() {
   grid[ PACMAN_START.y ][ PACMAN_START.x ] = 0;
 
   let dots = 0;
-  for ( const row of grid ) for ( const v of row ) if ( v === 2 ) dots++;
+  for ( const row of grid ) for ( const v of row ) if ( v === 2 || v === 4 ) dots++;
 
   return {
     state: 'start',
@@ -51,10 +56,13 @@ function createGame() {
       kind: g.kind,
       corner: g.corner,
       inPen: g.kind !== 'blinky',
+      eyes: false, // true mientras viaja a la casa tras ser comido
     } ) ),
-    modeIndex: 0, // posicion en el ciclo de modos
-    modeTimer: 0, // frames desde el ultimo cambio de modo
-    exitTimer: 0, // frames desde el inicio o la ultima vida perdida
+    modeIndex: 0,   // posicion en el ciclo de modos
+    modeTimer: 0,   // frames desde el ultimo cambio de modo
+    exitTimer: 0,   // frames desde el inicio o la ultima vida perdida
+    frightTimer: 0, // frames restantes de frightened (0 = inactivo)
+    frightEaten: 0, // fantasmas comidos con el pellet actual
   };
 }
 
@@ -105,11 +113,16 @@ function movePacman( game ) {
       p.dir = p.nextDir;
       p.nextDir = null;
     }
-    // Comer dot.
-    if ( grid[ p.y ][ p.x ] === 2 ) {
+    // Comer dot (10 pts) o power pellet (50 pts, activa frightened).
+    const cell = grid[ p.y ][ p.x ];
+    if ( cell === 2 || cell === 4 ) {
       grid[ p.y ][ p.x ] = 0;
-      game.score += 10;
+      game.score += cell === 4 ? 50 : 10;
       game.dotsRemaining--;
+      if ( cell === 4 ) {
+        game.frightTimer = FRIGHT_SECS * 60;
+        game.frightEaten = 0; // pellet nuevo: reinicia la serie de comidos
+      }
     }
     // Si no puede seguir, se detiene en la celda.
     if ( !canMove( grid, p.x, p.y, p.dir ) ) return;
@@ -135,6 +148,12 @@ function advanceMode( game ) {
     game.modeTimer = 0;
     game.modeIndex++;
   }
+}
+
+// Regla global del frightened: queda temporizador y el fantasma no es ojos.
+// Incluye a los que esperan dentro de la casa.
+function isFrightened( game, g ) {
+  return game.frightTimer > 0 && !g.eyes;
 }
 
 // Casilla objetivo del fantasma segun su personalidad (modo chase).
@@ -165,13 +184,21 @@ function ghostTarget( game, g ) {
 
 function decideGhost( game, g ) {
   const grid = game.grid;
-  const target = ghostTarget( game, g );
 
   const options = Object.keys( DIRS ).filter(
     ( dir ) => dir !== OPPOSITE[ g.dir ] && canMove( grid, g.x, g.y, dir )
   );
   // Sin salida (callejon): permitir el giro de 180.
   const choices = options.length ? options : [ '' + OPPOSITE[ g.dir ] ];
+
+  // Frightened: direccion al azar entre las validas, sin IA de persecucion.
+  if ( isFrightened( game, g ) ) {
+    g.dir = choices[ Math.floor( Math.random() * choices.length ) ];
+    return;
+  }
+
+  // Ojos: regreso greedy hacia la puerta de la casa (sin scatter/chase).
+  const target = g.eyes ? DOOR_TOP : ghostTarget( game, g );
 
   // Elegir la direccion que minimiza la distancia Manhattan al objetivo.
   let best = choices[ 0 ];
@@ -213,6 +240,21 @@ function moveGhost( game, g ) {
   const grid = game.grid;
   const width = grid[ 0 ].length;
 
+  // Ojos que alcanzaron la puerta: descenso guiado hasta el fondo de la casa
+  // (cruza la puerta sin canMove, como la salida guiada) y revive al llegar.
+  if ( g.eyes && Math.abs( g.x - DOOR_TOP.x ) < 1e-3 && g.y >= DOOR_TOP.y - 1e-3 && g.y < 14 ) {
+    g.x = DOOR_TOP.x;
+    g.dir = 'down';
+    g.y += g.speed;
+    if ( g.y >= 14 ) {
+      g.y = 14;
+      g.eyes = false;
+      g.inPen = true;
+      g.speed = GHOST_SPEED;
+    }
+    return;
+  }
+
   // Dentro de la casa: salida guiada por temporizador, no IA.
   if ( g.inPen ) {
     moveGhostInPen( game, g );
@@ -244,11 +286,15 @@ function resetPositions( game ) {
     g.y = start.y;
     g.dir = start.kind === 'blinky' ? 'left' : 'up';
     g.inPen = start.kind !== 'blinky';
+    g.eyes = false;
+    g.speed = GHOST_SPEED;
   } );
-  // El escalonado de salida y la programacion de modos se reinician.
+  // El escalonado de salida, la programacion de modos y el frightened se reinician.
   game.exitTimer = 0;
   game.modeIndex = 0;
   game.modeTimer = 0;
+  game.frightTimer = 0;
+  game.frightEaten = 0;
 }
 
 function collides( a, b ) {
@@ -256,26 +302,47 @@ function collides( a, b ) {
 }
 
 function update( game ) {
-  advanceMode( game );
-  game.exitTimer++;
+  // Durante el frightened, el ciclo scatter/chase y el escalonado de salida
+  // se pausan (como en el arcade).
+  if ( game.frightTimer <= 0 ) {
+    advanceMode( game );
+    game.exitTimer++;
+  }
   movePacman( game );
   game.ghosts.forEach( ( g ) => moveGhost( game, g ) );
 
   for ( const g of game.ghosts ) {
-    if ( collides( game.pacman, g ) ) {
-      game.lives--;
-      if ( game.lives <= 0 ) {
-        game.state = 'lost';
-        return;
-      }
-      resetPositions( game );
-      break;
+    if ( !collides( game.pacman, g ) ) continue;
+    if ( g.eyes ) continue; // ojos: Pac-Man los atraviesa sin morir
+    if ( isFrightened( game, g ) ) {
+      // Comer fantasma: puntaje progresivo 200/400/800/1600 por pellet.
+      game.score += 200 * Math.pow( 2, game.frightEaten );
+      game.frightEaten++;
+      g.eyes = true;
+      g.speed = EYES_SPEED;
+      // Ajustar a la cuadricula de 0.2 (salto maximo 2 px): con fraccion par
+      // los pasos de 0.2 aterrizan en celdas y el greedy puede decidir.
+      g.x = Math.round( g.x * 5 ) / 5;
+      g.y = Math.round( g.y * 5 ) / 5;
+      continue;
     }
+    game.lives--;
+    if ( game.lives <= 0 ) {
+      game.state = 'lost';
+      return;
+    }
+    resetPositions( game );
+    break;
   }
 
   if ( game.dotsRemaining <= 0 ) game.state = 'won';
+
+  // Decrementa al final, tras resolver colisiones: ningun fantasma pasa a
+  // matar en el frame exacto en que expira el frightened.
+  if ( game.frightTimer > 0 ) game.frightTimer--;
 }
 
 window.createGame = createGame;
 window.update = update;
 window.DIRS = DIRS;
+window.FRIGHT_FLASH_SECS = FRIGHT_FLASH_SECS;
